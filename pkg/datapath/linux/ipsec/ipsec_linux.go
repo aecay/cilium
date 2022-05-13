@@ -12,16 +12,21 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netlink"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/linux_defaults"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
+	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/encrypt"
+	"github.com/cilium/cilium/pkg/node"
+	"github.com/cilium/cilium/pkg/nodediscovery"
 	"github.com/cilium/cilium/pkg/option"
 )
 
@@ -619,4 +624,50 @@ func DeleteIPsecEncryptRoute() {
 			}
 		}
 	}
+}
+
+func keyfileWatcher(watcher *fsnotify.Watcher, keyfilePath string, nodediscovery *nodediscovery.NodeDiscovery) {
+	for {
+		select {
+		case event := <-watcher.Events:
+			if event.Name != keyfilePath {
+				continue
+			}
+
+			log.WithField(logfields.Path, keyfilePath).Debugf("Received %s fsnotify event for IPSec keyfile", event.Op.String())
+			if event.Op&(fsnotify.Create|fsnotify.Write) == 0 {
+				continue
+			}
+
+			_, spi, err := LoadIPSecKeysFile(keyfilePath)
+			if err != nil {
+				log.WithError(err).Errorf("Failed to load IPsec keyfile")
+			}
+
+			node.SetIPsecKeyIdentity(spi)
+			nodediscovery.UpdateNode()
+
+		case err := <-watcher.Errors:
+			log.WithError(err).WithField("path", keyfilePath).Warning("error encountered while watching file with fsnotify")
+		}
+	}
+}
+
+func StartKeyfileWatcher(keyfilePath string, nodediscovery *nodediscovery.NodeDiscovery) error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return err
+	}
+
+	// We need to watch the whole directory to deal with the possibility
+	// that the file gets removed and recreated.
+	keyfileDirectory, _ := filepath.Split(keyfilePath)
+	if err := watcher.Add(keyfileDirectory); err != nil {
+		watcher.Close()
+		return err
+	}
+
+	go keyfileWatcher(watcher, keyfilePath, nodediscovery)
+
+	return nil
 }
