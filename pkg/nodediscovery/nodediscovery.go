@@ -179,6 +179,8 @@ func (n *NodeDiscovery) StartDiscovery() {
 	n.localNodeLock.Lock()
 	defer n.localNodeLock.Unlock()
 
+	n.fillLocalNode()
+
 	go func() {
 		log.WithFields(
 			logrus.Fields{
@@ -216,7 +218,7 @@ func (n *NodeDiscovery) UpdateNode() {
 	n.updateNode()
 }
 
-func (n *NodeDiscovery) updateNode() {
+func (n *NodeDiscovery) fillLocalNode() {
 	n.localNode.Name = nodeTypes.GetName()
 	n.localNode.Cluster = option.Config.ClusterName
 	n.localNode.IPAddresses = []nodeTypes.Address{}
@@ -271,6 +273,11 @@ func (n *NodeDiscovery) updateNode() {
 			IP:   node.GetK8sExternalIPv6(),
 		})
 	}
+
+}
+
+func (n *NodeDiscovery) updateNode() {
+	n.fillLocalNode()
 
 	if option.Config.KVStore != "" && !option.Config.JoinCluster {
 		go func() {
